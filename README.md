@@ -8,10 +8,10 @@ Collecte des données OHLCV (Yahoo Finance) → feature engineering (log-returns
 
 ```
 QUANT_PIPE/
-├── data_collector.py       # Collecte OHLCV (yfinance) + retry/backoff + logging
-├── features.py              # Feature engineering pur (log-returns, volatilité, corrélations)
-├── main.py                  # Orchestrateur du pipeline (appelé par Docker)
-├── stats_analysis.ipynb     # Notebook : ADF, ACF/PACF, kurtosis/QQ-plot
+├──DATA_RET/
+|    ├── data_collector.py       # Collecte OHLCV (yfinance) + retry/backoff + logging
+|    ├── features.py              # Feature engineering pur (log-returns, volatilité, corrélations)
+|    ├── main.py                  # Orchestrateur du pipeline (appelé par Docker)
 ├── data/
 │   ├── raw/                 # Données brutes, jamais transformées (non versionné)
 │   └── processed/           # Features calculées (non versionné)
