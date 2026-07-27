@@ -34,7 +34,7 @@ QUANT_PIPE/
 ## Installation locale (sans Docker)
 
 ```bash
-git clone <url-du-repo>
+git clone https://github.com/hamzaahrim0/QUANT_PIPE.git
 cd QUANT_PIPE
 
 python -m venv venv
