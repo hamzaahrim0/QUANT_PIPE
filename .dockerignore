@@ -4,9 +4,12 @@ __pycache__/
 .git/
 .gitignore
 data/raw/*
-data/processed/*
 !data/raw/.gitkeep
+data/processed/*
 !data/processed/.gitkeep
+!data/processed/pairs
+data/processed/pairs/*
+!data/processed/pairs/.gitkeep
 .ipynb_checkpoints/
 .env
 .pytest_cache/

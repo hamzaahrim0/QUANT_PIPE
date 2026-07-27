@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
+
+# data_collector.py, features.py, pairs_pipeline.py (+ ses dépendances
+# cointegration.py / kalman.py) vivent dans DATA_RET/, alors que main.py
+# est à la racine du repo. On ajoute DATA_RET/ au sys.path pour que les
+# imports flat ci-dessous (et ceux, internes, de pairs_pipeline.py) se
+# résolvent quel que soit le répertoire courant depuis lequel main.py
+# est lancé (utile pour `python main.py` local ET pour Docker).
+sys.path.insert(0, str(Path(__file__).resolve().parent / "DATA_RET"))
 
 from data_collector import configure_logging, fetch_ohlcv, save_raw
 from features import compute_log_returns, rolling_volatility
+from pairs_pipeline import run_pairs_pipeline
 
 logger = logging.getLogger("quantpipe.main")
 
@@ -40,6 +50,9 @@ def run_pipeline() -> None:
             continue
 
     logger.info("Pipeline terminé (%d/%d tickers traités)", len(raw_data), len(TICKERS))
+
+    logger.info("=== Lancement du module paires cointégrées ===")
+    run_pairs_pipeline(start=START_DATE, end=END_DATE)
 
 
 if __name__ == "__main__":
