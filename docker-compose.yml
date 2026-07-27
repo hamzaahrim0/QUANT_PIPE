@@ -1,0 +1,8 @@
+services:
+  pipeline:
+    build: .
+    image: quantpipe:latest
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
