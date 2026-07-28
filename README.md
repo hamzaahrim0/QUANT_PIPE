@@ -7,23 +7,56 @@ Collecte des données OHLCV (Yahoo Finance) → feature engineering (log-returns
 ## Flux du pipeline
 
 ```mermaid
-flowchart TD
-    A["main.py\n(orchestrateur)"] --> B["data_collector.py\nCollecte OHLCV (yfinance)\n+ retry/backoff"]
-    B --> C[("data/raw/&lt;TICKER&gt;.parquet")]
-    C --> D["features.py\nlog-returns + volatilité glissante"]
-    D --> E[("data/processed/&lt;TICKER&gt;_features.parquet")]
-    E --> F["pairs_pipeline.py\nUnivers sectoriel (SECTOR_UNIVERSE)"]
-    F --> G["cointegration.py\nFiltre I(1) (ADF)"]
-    G --> H["Test Engle-Granger\nintra-secteur"]
-    H --> I["Filtre R²\n(MIN_R2 = 0.30)"]
-    I --> J["Correction FDR\n(Benjamini-Hochberg, alpha = 0.10)"]
-    J --> K["Validation OOS\n(β figé, retest stationnarité)"]
-    K --> L{"Paire validée\nsur les 4 critères ?"}
-    L -- non --> M["Paire rejetée"]
-    L -- oui --> N["kalman.py\nCalibration EM du spread"]
-    N --> O["Bootstrap paramétrique\n(N_BOOT = 30, IC 95% sur B)"]
-    O --> P["Test de blancheur\n(Ljung-Box)"]
-    P --> Q[("data/processed/pairs/\nscreening_results.parquet\nkalman_summary.parquet\n&lt;PAIR&gt;_kalman.parquet")]
+flowchart LR
+    subgraph S1["1. Collecte"]
+        direction TB
+        A["main.py"] --> B["data_collector.py\nOHLCV yfinance\n+ retry/backoff"]
+        B --> C[("data/raw/\n&lt;TICKER&gt;.parquet")]
+    end
+
+    subgraph S2["2. Features"]
+        direction TB
+        D["features.py\nlog-returns +\nvolatilité glissante"]
+        E[("data/processed/\n&lt;TICKER&gt;_features.parquet")]
+        D --> E
+    end
+
+    subgraph S3["3. Screening cointégration"]
+        direction TB
+        F["cointegration.py\nFiltre I(1) - ADF"]
+        G["Engle-Granger\nintra-secteur"]
+        H["Filtre R²\n(MIN_R2 = 0.30)"]
+        I["FDR\n(Benjamini-Hochberg\nalpha = 0.10)"]
+        J["Validation OOS\n(β figé)"]
+        K{"Validée sur\nles 4 critères ?"}
+        F --> G --> H --> I --> J --> K
+    end
+
+    subgraph S4["4. Kalman / EM"]
+        direction TB
+        L["kalman.py\nCalibration EM"]
+        M["Bootstrap paramétrique\n(N_BOOT = 30, IC 95% sur B)"]
+        N["Ljung-Box\n(blancheur innovations)"]
+        L --> M --> N
+    end
+
+    O[("data/processed/pairs/\nscreening_results.parquet\nkalman_summary.parquet\n&lt;PAIR&gt;_kalman.parquet")]
+    P["Paire rejetée"]
+
+    S1 --> S2 --> S3
+    K -- oui --> S4
+    K -- non --> P
+    S4 --> O
+
+    classDef code fill:#3b82f6,stroke:#1e3a8a,color:#ffffff,stroke-width:1px
+    classDef data fill:#f59e0b,stroke:#92400e,color:#1f2937,stroke-width:1px
+    classDef decision fill:#8b5cf6,stroke:#4c1d95,color:#ffffff,stroke-width:1px
+    classDef reject fill:#ef4444,stroke:#7f1d1d,color:#ffffff,stroke-width:1px
+
+    class A,B,D,F,G,H,I,J,L,M,N code
+    class C,E,O data
+    class K decision
+    class P reject
 ```
 
 ## Architecture
