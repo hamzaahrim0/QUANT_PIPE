@@ -94,6 +94,68 @@ QUANT_PIPE/
 - **Validation hors échantillon (OOS)** : le spread est reconstruit sur les données de test avec le β figé (jamais ré-estimé) et retesté pour stationnarité — une cointégration in-sample qui ne survit pas à ce test est un artefact de surajustement, pas un signal exploitable.
 - **Modèle Kalman/EM** : le spread cointégré est modélisé comme un processus local-level `x_t = A + B·x_{t-1} + ε_t`, `y_t = x_t + η_t`, calibré par EM, avec intervalle de confiance sur `B` obtenu par bootstrap paramétrique et diagnostic de blancheur des innovations (test de Ljung-Box).
 
+## Mathématiques du pipeline
+
+### Log-returns
+
+$$r_t = \ln\left(\frac{P_t}{P_{t-1}}\right)$$
+
+Contrairement au rendement simple $\frac{P_t - P_{t-1}}{P_{t-1}}$, le log-return est additif dans le temps ($r_{t_1 \to t_3} = r_{t_1 \to t_2} + r_{t_2 \to t_3}$) et symétrique (une hausse de 50% suivie d'une baisse de 50% ne ramène pas au prix initial en rendement simple, mais les log-returns correspondants s'annulent bien en valeur absolue).
+
+### Stationnarité — test ADF
+
+Le test de Dickey-Fuller augmenté teste l'hypothèse nulle de racine unitaire sur une série $x_t$ :
+
+$$\Delta x_t = \alpha + \beta t + \gamma x_{t-1} + \sum_{i=1}^{p} \delta_i \Delta x_{t-i} + \varepsilon_t$$
+
+$H_0 : \gamma = 0$ (racine unitaire, série non-stationnaire / intégrée d'ordre ≥ 1) contre $H_1 : \gamma < 0$ (série stationnaire). Une série de prix I(1) doit être différenciée une fois (log-returns) pour devenir stationnaire I(0).
+
+### Cointégration — Engle-Granger
+
+Pour deux séries $y_t$ et $x_t$ individuellement I(1), on estime la régression statique :
+
+$$y_t = \beta_0 + \beta_1 x_t + u_t$$
+
+par MCO, puis on applique le test ADF sur les résidus $\hat{u}_t$. Si $\hat{u}_t$ est stationnaire (rejet de la racine unitaire, avec des valeurs critiques spécifiques à Engle-Granger, plus strictes que l'ADF standard), $y_t$ et $x_t$ sont cointégrées : il existe une combinaison linéaire stationnaire malgré la non-stationnarité individuelle des deux séries. C'est $\hat{u}_t = y_t - \beta_0 - \beta_1 x_t$ qui constitue le spread trading.
+
+### Correction FDR — Benjamini-Hochberg
+
+Sur $m$ tests (une $p$-value $p_{(i)}$ par paire candidate), triés par ordre croissant, on cherche le plus grand $k$ tel que :
+
+$$p_{(k)} \le \frac{k}{m} \cdot \alpha$$
+
+et on rejette $H_0$ (i.e. on retient la paire comme cointégrée) pour tous les tests $i \le k$. Contrôle le taux de fausses découvertes attendu à $\alpha$ (ici 0.10) plutôt que le risque global d'au moins une fausse découverte (Bonferroni), donc moins conservateur — adapté à un screening exploratoire sur de nombreuses paires.
+
+### Validation OOS
+
+Le $\beta_1$ estimé en in-sample est figé, et le spread OOS est reconstruit par simple substitution :
+
+$$\hat{u}_t^{OOS} = y_t^{OOS} - \beta_0 - \beta_1 x_t^{OOS}, \quad t \in \text{test}$$
+
+Un nouveau test ADF est appliqué sur $\hat{u}_t^{OOS}$. Comme $\beta_1$ n'est jamais ré-estimé sur les données de test, une stationnarité qui ne survit pas ici est un artefact de surajustement in-sample, pas une relation économique réelle.
+
+### Modèle Kalman / EM
+
+Le spread cointégré est modélisé comme un processus local-level (state-space linéaire-gaussien) :
+
+$$x_t = A + B\,x_{t-1} + \varepsilon_t, \qquad \varepsilon_t \sim \mathcal{N}(0, Q)$$
+$$y_t = x_t + \eta_t, \qquad \eta_t \sim \mathcal{N}(0, R)$$
+
+où $x_t$ est l'état latent (niveau du spread) et $y_t$ l'observation bruitée. Le filtre de Kalman produit l'estimée filtrée $\hat{x}_{t\mid t}$ récursivement (étapes prédiction / mise à jour), et le lisseur RTS (Rauch-Tung-Striebel) raffine cette estimée en incorporant l'information future ($\hat{x}_{t\mid T}$).
+
+Les paramètres $(A, B, Q, R)$ sont inconnus et estimés par l'algorithme EM (Expectation-Maximization) :
+- **E-step** : calcul des espérances des états latents via le lisseur, sachant les paramètres courants.
+- **M-step** : ré-estimation de $(A, B, Q, R)$ par maximum de vraisemblance, sachant les états lissés.
+- Itération jusqu'à convergence de la log-vraisemblance.
+
+L'incertitude sur $B$ (persistance du spread, liée à la vitesse de retour à la moyenne) est quantifiée par bootstrap paramétrique : simulation de $N\_BOOT$ trajectoires sous le modèle estimé, ré-estimation EM sur chacune, IC 95% empirique sur la distribution des $\hat{B}$ obtenus.
+
+Enfin, le test de Ljung-Box est appliqué aux résidus d'innovation du filtre pour vérifier leur blancheur :
+
+$$Q_{LB} = n(n+2) \sum_{k=1}^{h} \frac{\hat{\rho}_k^2}{n-k} \sim \chi^2_h \text{ sous } H_0 \text{ (bruit blanc)}$$
+
+Le rejet de $H_0$ indique une mauvaise spécification du modèle (autocorrélation résiduelle non capturée).
+
 ## Installation locale (sans Docker)
 
 ```bash
@@ -146,7 +208,25 @@ ls data/processed/pairs/  # idem pour les résultats du screening/Kalman
 5. **Screening de paires cointégrées** (`DATA_RET/pairs_pipeline.py` + `cointegration.py`) : univers sectoriel (`SECTOR_UNIVERSE`, ~40 tickers sur 8 secteurs) → filtre I(1) → test Engle-Granger intra-secteur → filtre R² (`MIN_R2 = 0.30`) → correction FDR (`ALPHA_FDR = 0.10`) → validation OOS avec β figé. Résultat complet dans `data/processed/pairs/screening_results.parquet`.
 6. **Calibration Kalman/EM** (`DATA_RET/kalman.py`) : pour chaque paire ayant passé les 4 critères, calibration EM du spread, bootstrap paramétrique (`N_BOOT = 30`, IC 95% sur `B`) et test de blancheur des innovations (Ljung-Box). Résumé dans `data/processed/pairs/kalman_summary.parquet`, état filtré par paire dans `data/processed/pairs/<Y>_<X>_kalman.parquet`.
 
+## Exemple de sortie du pipeline
 
+```
+=== Démarrage du pipeline QuantPipe ===
+Ticker 'AAPL' : 1509 lignes récupérées (2018-01-01 → 2024-01-01).
+Sauvegardé : data/raw/AAPL.parquet (1509 lignes).
+Features sauvegardées pour 'AAPL' -> data/processed/AAPL_features.parquet
+Pipeline terminé (4/4 tickers traités)
+
+=== Lancement du module paires cointégrées ===
+42 ticker(s) manquant(s) dans data/raw/ — téléchargement automatique via data_collector.py sur [2018-01-01, 2024-01-01]...
+Log-prix chargés : 42 tickers, 752 dates communes
+Lancement du screening Engle-Granger + FDR + validation OOS...
+Correction FDR (alpha=0.10) : 1/87 paires survivent
+Screening terminé : 87 paires testées, 1 passent EG+R²+FDR, 0 confirmées OOS
+Aucune paire n'a passé les 4 critères (EG, R², FDR, validation OOS). Élargir SECTOR_UNIVERSE ou la fenêtre temporelle avant de relancer.
+```
+
+Un résultat à 0 paire confirmée OOS n'est pas une erreur : c'est la validation hors échantillon qui fait son travail en éliminant les faux positifs de surajustement. Élargir `SECTOR_UNIVERSE` ou la fenêtre temporelle dans `DATA_RET/pairs_pipeline.py` augmente les chances de trouver une paire qui survit aux 4 critères.
 
 ## Outils
 
