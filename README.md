@@ -2,7 +2,29 @@
 
 Pipeline de données financières dockerisé pour l'analyse quantitative.
 
-Collecte des données OHLCV (Yahoo Finance) → feature engineering (log-returns, volatilité) → tests statistiques (stationnarité, autocorrélation, fat tails) → screening de paires cointégrées (Engle-Granger + FDR + validation OOS) → calibration Kalman/EM sur les spreads — le tout reproductible via Docker.
+Collecte des données OHLCV (Yahoo Finance) → feature engineering (log-returns, volatilité) → screening de paires cointégrées (Engle-Granger + FDR + validation OOS) → calibration Kalman/EM sur les spreads — le tout reproductible via Docker.
+
+## Flux du pipeline
+
+```mermaid
+flowchart TD
+    A["main.py\n(orchestrateur)"] --> B["data_collector.py\nCollecte OHLCV (yfinance)\n+ retry/backoff"]
+    B --> C[("data/raw/&lt;TICKER&gt;.parquet")]
+    C --> D["features.py\nlog-returns + volatilité glissante"]
+    D --> E[("data/processed/&lt;TICKER&gt;_features.parquet")]
+    E --> F["pairs_pipeline.py\nUnivers sectoriel (SECTOR_UNIVERSE)"]
+    F --> G["cointegration.py\nFiltre I(1) (ADF)"]
+    G --> H["Test Engle-Granger\nintra-secteur"]
+    H --> I["Filtre R²\n(MIN_R2 = 0.30)"]
+    I --> J["Correction FDR\n(Benjamini-Hochberg, alpha = 0.10)"]
+    J --> K["Validation OOS\n(β figé, retest stationnarité)"]
+    K --> L{"Paire validée\nsur les 4 critères ?"}
+    L -- non --> M["Paire rejetée"]
+    L -- oui --> N["kalman.py\nCalibration EM du spread"]
+    N --> O["Bootstrap paramétrique\n(N_BOOT = 30, IC 95% sur B)"]
+    O --> P["Test de blancheur\n(Ljung-Box)"]
+    P --> Q[("data/processed/pairs/\nscreening_results.parquet\nkalman_summary.parquet\n&lt;PAIR&gt;_kalman.parquet")]
+```
 
 ## Architecture
 
@@ -15,7 +37,6 @@ QUANT_PIPE/
 │   ├── cointegration.py     # Screening Engle-Granger + FDR + validation OOS (fonctions pures)
 │   ├── kalman.py             # Filtre de Kalman + lisseur RTS + EM + bootstrap paramétrique
 │   └── pairs_pipeline.py    # Orchestrateur du module paires cointégrées
-├── stats_analysis.ipynb     # Notebook : ADF, ACF/PACF, kurtosis/QQ-plot
 ├── data/
 │   ├── raw/                 # Données brutes, jamais transformées (non versionné)
 │   └── processed/           # Features + résultats de screening/Kalman (non versionné)
@@ -33,13 +54,12 @@ QUANT_PIPE/
 
 ## Concepts clés implémentés
 
-- **Stationnarité** : un prix brut n'est pas stationnaire (tendance + variance changeante) ; on le transforme en log-prix/log-returns pour l'analyse. Vérifié empiriquement via le test ADF (notebook, et `is_integrated_order1` dans `cointegration.py`).
+- **Stationnarité** : un prix brut n'est pas stationnaire (tendance + variance changeante) ; on le transforme en log-prix/log-returns pour l'analyse. Vérifié empiriquement via le test ADF (`is_integrated_order1` dans `cointegration.py`).
 - **Log-returns vs rendements simples** : `r_log = ln(P_t / P_t-1)`, additifs dans le temps (utile pour l'agrégation) et symétriques (contrairement aux rendements simples).
 - **Cointégration (Engle-Granger)** : deux séries I(1) individuellement non-stationnaires peuvent avoir une combinaison linéaire stationnaire — condition théorique du pairs trading. Screening intra-secteur uniquement (pas cross-sector, pour limiter le nombre de tests sans justification économique).
 - **Correction FDR (Benjamini-Hochberg)** : contrôle le taux de fausses découvertes sur les tests multiples du screening, moins conservateur que Bonferroni, adapté à un screening exploratoire.
 - **Validation hors échantillon (OOS)** : le spread est reconstruit sur les données de test avec le β figé (jamais ré-estimé) et retesté pour stationnarité — une cointégration in-sample qui ne survit pas à ce test est un artefact de surajustement, pas un signal exploitable.
 - **Modèle Kalman/EM** : le spread cointégré est modélisé comme un processus local-level `x_t = A + B·x_{t-1} + ε_t`, `y_t = x_t + η_t`, calibré par EM, avec intervalle de confiance sur `B` obtenu par bootstrap paramétrique et diagnostic de blancheur des innovations (test de Ljung-Box).
-- **Fat tails** : la kurtosis des rendements réels dépasse généralement 3 (vs loi normale), visible sur le QQ-plot — implication directe sur le risque sous-estimé par les modèles gaussiens (VaR, etc.).
 
 ## Installation locale (sans Docker)
 
@@ -52,8 +72,7 @@ source venv/bin/activate        # Windows : venv\Scripts\activate
 
 pip install -r requirements.txt
 
-python main.py                              # lance le pipeline complet (features + paires)
-jupyter notebook stats_analysis.ipynb       # exploration statistique
+python main.py                  # lance le pipeline complet (features + paires)
 ```
 
 Pour lancer uniquement le module paires cointégrées (utile en itération) :
@@ -93,7 +112,6 @@ ls data/processed/pairs/  # idem pour les résultats du screening/Kalman
 4. **Sauvegarde des features** : résultat stocké dans `data/processed/<TICKER>_features.parquet`.
 5. **Screening de paires cointégrées** (`DATA_RET/pairs_pipeline.py` + `cointegration.py`) : univers sectoriel (`SECTOR_UNIVERSE`, ~40 tickers sur 8 secteurs) → filtre I(1) → test Engle-Granger intra-secteur → filtre R² (`MIN_R2 = 0.30`) → correction FDR (`ALPHA_FDR = 0.10`) → validation OOS avec β figé. Résultat complet dans `data/processed/pairs/screening_results.parquet`.
 6. **Calibration Kalman/EM** (`DATA_RET/kalman.py`) : pour chaque paire ayant passé les 4 critères, calibration EM du spread, bootstrap paramétrique (`N_BOOT = 30`, IC 95% sur `B`) et test de blancheur des innovations (Ljung-Box). Résumé dans `data/processed/pairs/kalman_summary.parquet`, état filtré par paire dans `data/processed/pairs/<Y>_<X>_kalman.parquet`.
-7. **Analyse statistique** (`stats_analysis.ipynb`) : test ADF (prix vs rendements), ACF/PACF, kurtosis et QQ-plot vs loi normale.
 
 ## Exemple de sortie du pipeline
 
@@ -115,14 +133,6 @@ Aucune paire n'a passé les 4 critères (EG, R², FDR, validation OOS). Élargir
 
 Un résultat à 0 paire confirmée OOS n'est pas une erreur : c'est la validation hors échantillon qui fait son travail en éliminant les faux positifs de surajustement. Élargir `SECTOR_UNIVERSE` ou la fenêtre temporelle dans `DATA_RET/pairs_pipeline.py` augmente les chances de trouver une paire qui survit aux 4 critères.
 
-## Roadmap / prochaines étapes
-
-- Tests unitaires (pytest) sur `features.py`, `cointegration.py` et `kalman.py`
-- Test de significativité de l'exposant de Hurst
-- Stratégie de trading mean-reverting (pairs trading) à partir des paires validées et de leur calibration Kalman
-- VaR paramétrique vs historique (lien avec les fat tails observées)
-- Élargir `SECTOR_UNIVERSE` et/ou étendre le screening au cross-sector avec justification économique
-
 ## Outils
 
-Python · pandas · numpy · yfinance · pyarrow · statsmodels · scipy · matplotlib · Docker · Git
+Python · pandas · numpy · yfinance · pyarrow · statsmodels · scipy · Docker · Git
