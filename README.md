@@ -208,25 +208,9 @@ ls data/processed/pairs/  # idem pour les résultats du screening/Kalman
 5. **Screening de paires cointégrées** (`DATA_RET/pairs_pipeline.py` + `cointegration.py`) : univers sectoriel (`SECTOR_UNIVERSE`, ~40 tickers sur 8 secteurs) → filtre I(1) → test Engle-Granger intra-secteur → filtre R² (`MIN_R2 = 0.30`) → correction FDR (`ALPHA_FDR = 0.10`) → validation OOS avec β figé. Résultat complet dans `data/processed/pairs/screening_results.parquet`.
 6. **Calibration Kalman/EM** (`DATA_RET/kalman.py`) : pour chaque paire ayant passé les 4 critères, calibration EM du spread, bootstrap paramétrique (`N_BOOT = 30`, IC 95% sur `B`) et test de blancheur des innovations (Ljung-Box). Résumé dans `data/processed/pairs/kalman_summary.parquet`, état filtré par paire dans `data/processed/pairs/<Y>_<X>_kalman.parquet`.
 
-## Exemple de sortie du pipeline
 
-```
-=== Démarrage du pipeline QuantPipe ===
-Ticker 'AAPL' : 1509 lignes récupérées (2018-01-01 → 2024-01-01).
-Sauvegardé : data/raw/AAPL.parquet (1509 lignes).
-Features sauvegardées pour 'AAPL' -> data/processed/AAPL_features.parquet
-Pipeline terminé (4/4 tickers traités)
 
-=== Lancement du module paires cointégrées ===
-42 ticker(s) manquant(s) dans data/raw/ — téléchargement automatique via data_collector.py sur [2018-01-01, 2024-01-01]...
-Log-prix chargés : 42 tickers, 752 dates communes
-Lancement du screening Engle-Granger + FDR + validation OOS...
-Correction FDR (alpha=0.10) : 1/87 paires survivent
-Screening terminé : 87 paires testées, 1 passent EG+R²+FDR, 0 confirmées OOS
-Aucune paire n'a passé les 4 critères (EG, R², FDR, validation OOS). Élargir SECTOR_UNIVERSE ou la fenêtre temporelle avant de relancer.
-```
 
-Un résultat à 0 paire confirmée OOS n'est pas une erreur : c'est la validation hors échantillon qui fait son travail en éliminant les faux positifs de surajustement. Élargir `SECTOR_UNIVERSE` ou la fenêtre temporelle dans `DATA_RET/pairs_pipeline.py` augmente les chances de trouver une paire qui survit aux 4 critères.
 
 ## Outils
 
